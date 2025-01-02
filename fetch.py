@@ -1,49 +1,59 @@
 import yfinance as yf
-from datetime import datetime, timedelta
+import pandas as pd
+from datetime import datetime
 
-def fetch_options(ticker):
-    # Fetch the data for the given ticker
+def fetch_options_data(ticker):
     stock = yf.Ticker(ticker)
-    
-    # Get the current stock price
     current_price = stock.history(period="1d")['Close'].iloc[-1]
-    
-    # Get options expirations
     expirations = stock.options
     
-    # Calculate the next three months range
-    three_months = [exp for exp in expirations if datetime.strptime(exp, "%Y-%m-%d") <= datetime.now() + timedelta(days=90)]
+    # Filter expirations for the next 3 months
+    three_months_later = (datetime.now() + pd.DateOffset(months=3)).date()
+    valid_expirations = [date for date in expirations if datetime.strptime(date, '%Y-%m-%d').date() <= three_months_later]
+
+    all_options = []
     
-    options_data = {
-        "calls": [],
-        "puts": []
-    }
-    
-    # Fetch the option chain for the next three months
-    for exp in three_months:
-        opt = stock.option_chain(exp)
+    for date in valid_expirations:
+        opt = stock.option_chain(date)
         
-        # Get three closest call options
+        # Process call options
         calls = opt.calls
+        calls['type'] = 'Call'
         calls['distance'] = abs(calls['strike'] - current_price)
-        closest_calls = calls.sort_values(by='distance').head(3)[['strike', 'lastPrice', 'distance']]
         
-        # Get three closest put options
+        # Process put options
         puts = opt.puts
+        puts['type'] = 'Put'
         puts['distance'] = abs(puts['strike'] - current_price)
-        closest_puts = puts.sort_values(by='distance').head(3)[['strike', 'lastPrice', 'distance']]
         
-        options_data['calls'].append(closest_calls)
-        options_data['puts'].append(closest_puts)
+        # Combine and sort by distance, take the top 3 closest to market price
+        options = pd.concat([calls, puts])
+        closest_options = options.sort_values(by='distance').head(3)[['type', 'strike', 'lastPrice', 'lastTradeDate', 'expiration']]
+        
+        # Append data
+        all_options.append(closest_options)
     
-    return options_data
+    # Concatenate all options data
+    return pd.concat(all_options, ignore_index=True)
 
-# Tickers to fetch options for
-tickers = ["INTC", "CLF", "MSTR"]
+def save_to_csv(data, filename):
+    data.to_csv(filename, index=False)
+    print(f"Data saved to {filename}")
 
-# Get options data for each ticker
-all_data = {}
+# Tickers to process
+tickers = ['INTC', 'CLF', 'MSTR']
+
+# Prepare the DataFrame
+all_data = pd.DataFrame()
+
+# Fetch and aggregate data
 for ticker in tickers:
     print(f"Fetching options for {ticker}")
-    all_data[ticker] = fetch_options(ticker)
-    print(f"Options for {ticker}: Calls - {all_data[ticker]['calls']} Puts - {all_data[ticker]['puts']}")
+    options_data = fetch_options_data(ticker)
+    options_data['ticker'] = ticker
+    all_data = pd.concat([all_data, options_data], ignore_index=True)
+
+# Save the data to a CSV file
+today_date = datetime.now().strftime('%Y-%m-%d')
+filename = f"options_data_{today_date}.csv"
+save_to_csv(all_data, filename)
