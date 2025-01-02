@@ -2,58 +2,46 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 
-def fetch_options_data(ticker):
+def fetch_options_data(ticker, target_months):
     stock = yf.Ticker(ticker)
-    current_price = stock.history(period="1d")['Close'].iloc[-1]
-    expirations = stock.options
-    
-    # Filter expirations for the next 3 months
-    three_months_later = (datetime.now() + pd.DateOffset(months=3)).date()
-    valid_expirations = [date for date in expirations if datetime.strptime(date, '%Y-%m-%d').date() <= three_months_later]
+    options_data = []
 
-    all_options = []
-    
-    for date in valid_expirations:
-        opt = stock.option_chain(date)
-        
-        # Process call options
-        calls = opt.calls
-        calls['type'] = 'Call'
-        calls['distance'] = abs(calls['strike'] - current_price)
-        
-        # Process put options
-        puts = opt.puts
-        puts['type'] = 'Put'
-        puts['distance'] = abs(puts['strike'] - current_price)
-        
-        # Combine and sort by distance, take the top 3 closest to market price
-        options = pd.concat([calls, puts])
-        closest_options = options.sort_values(by='distance').head(3)[['type', 'strike', 'lastPrice', 'lastTradeDate', 'expiration']]
-        
-        # Append data
-        all_options.append(closest_options)
-    
-    # Concatenate all options data
-    return pd.concat(all_options, ignore_index=True)
+    # Target expiration months
+    target_expirations = [date for date in stock.options if datetime.strptime(date, '%Y-%m-%d').strftime('%b %Y') in target_months]
+
+    for exp_date in target_expirations:
+        # Fetch options data for each target expiration date
+        opt_chain = stock.option_chain(exp_date)
+        for option_type, options in [('Calls', opt_chain.calls), ('Puts', opt_chain.puts)]:
+            options['Type'] = option_type  # Add a new column for option type
+            options['Expiration'] = exp_date  # Add a new column for expiration date
+            options_data.append(options[['Type', 'Expiration', 'strike', 'lastPrice', 'openInterest', 'impliedVolatility']])
+
+    # Concatenate all data into a single DataFrame
+    if options_data:
+        full_data = pd.concat(options_data)
+        return full_data
+    else:
+        return pd.DataFrame()  # Return an empty DataFrame if no data found
 
 def save_to_csv(data, filename):
-    data.to_csv(filename, index=False)
-    print(f"Data saved to {filename}")
+    if not data.empty:
+        data.to_csv(filename, index=False)
+        print(f"Data saved to {filename}")
+    else:
+        print("No data to save.")
 
-# Tickers to process
-tickers = ['INTC', 'CLF', 'MSTR']
+# Define the tickers and target months
+tickers = ['INTC']
+target_months = ['Jun 2025', 'Jan 2026']
 
-# Prepare the DataFrame
-all_data = pd.DataFrame()
-
-# Fetch and aggregate data
+# Process each ticker
 for ticker in tickers:
     print(f"Fetching options for {ticker}")
-    options_data = fetch_options_data(ticker)
-    options_data['ticker'] = ticker
-    all_data = pd.concat([all_data, options_data], ignore_index=True)
-
-# Save the data to a CSV file
-today_date = datetime.now().strftime('%Y-%m-%d')
-filename = f"options_data_{today_date}.csv"
-save_to_csv(all_data, filename)
+    options_data = fetch_options_data(ticker, target_months)
+    if not options_data.empty:
+        today_date = datetime.now().strftime('%Y-%m-%d')
+        filename = f"{ticker}_{today_date}.csv"
+        save_to_csv(options_data, filename)
+    else:
+        print(f"No options data found for {ticker} in the specified months.")
